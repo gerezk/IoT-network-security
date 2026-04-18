@@ -8,7 +8,21 @@ tbw
 
 tbw
 
-## ✅ Testing 
+## 📊🔍 Message Frequency Validation
+
+Inconsistencies were identified between documented and observed message frequencies, primarily for sensors labeled as 
+random, which should mean that sending is achieved at random periods (*m*), with *m* ≤ *n*, where *n* is the documented
+message frequency. All random sensors were assigned an *n* of 3600. This should mean that messages are randomly 
+distributed between 0 and 3600 seconds. 
+
+Instead, it was found that all random sensors behaved as periodic sensors with
+a message frequency of 1 second. This finding does not invalidate the overarching purpose of the dataset, since the 
+focus is on the protocol-level features and attack signatures rather than the exact temporal structure. But this is 
+still important to note when creating tests for the MLops pipeline.
+
+For details on the analysis, see `../notebooks/msg_freq_validation.ipynb`.
+
+## ✅ Testing
 
 ### Pre-training Tests
 
@@ -29,6 +43,7 @@ unsigned integers ranging from 0 to 65535.
 192.168.0.150, 192.168.0.152, 192.168.0.154, 192.168.0.155, 192.168.0.180, 192.168.0.173, 192.168.0.176, 192.168.0.178, 
 192.168.0.174, 192.168.1.90, 192.168.1.91, 192.168.1.100}, which contains the IP addresses of all devices used for 
 data collection.
+3. **frame.time_delta** ≤ 1.1 sec and a value greater than that can be interpreted as a possible network outage.
 
 ### Pre-deployment Tests
 
