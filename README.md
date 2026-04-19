@@ -13,10 +13,13 @@ tbw
 Inconsistencies were identified between documented and observed message frequencies, primarily for sensors labeled as 
 random, which should mean that sending is achieved at random periods (*m*), with *m* ≤ *n*, where *n* is the documented
 message frequency. All random sensors were assigned an *n* of 3600. This should mean that messages are randomly 
-distributed between 0 and 3600 seconds. 
+distributed between 0 and 3600 seconds.
 
 Instead, it was found that all random sensors behaved as periodic sensors with
-a message frequency of 1 second. This finding does not invalidate the overarching purpose of the dataset, since the 
+a message frequency of 1 second. Additionally, the light intensity sensor should have pushed a message every 1800
+seconds, but instead a frequency of 180 seconds was observed.
+
+This finding does not invalidate the overarching purpose of the dataset, since the 
 focus is on the protocol-level features and attack signatures rather than the exact temporal structure. But this is 
 still important to note when creating tests for the MLops pipeline.
 
@@ -79,6 +82,7 @@ The dataset in the project is based on the MQTTset. The goal of the dataset crea
 was to provide a dataset for a realistic IoT configuration based on the MQTT 
 communication protocol, which is a network protocol specifically used in IoT contexts.
 
-The full dataset is on [Kaggle](https://www.kaggle.com/datasets/cnrieiit/mqttset). 
+The full dataset is on [Kaggle](https://www.kaggle.com/datasets/cnrieiit/mqttset). It is licensed under the
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) license.
 More information can be found in the paper 
 ([DOI: 10.3390/s20226578](https://doi.org/10.3390/s20226578)).

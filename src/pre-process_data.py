@@ -1,111 +1,118 @@
 """
-Combines all packet classes into a single csv, with attack packets temporally interleaved into the normal packet stream
-via random injection. Attack packets are given synthetic time information based on normal packets.
+Split legitimate_1w.csv into three files:
+    reference.csv - a slice of normal packets at the beginning that will be used to derive tests
+    training.csv - a slice of mixed packets after reference.csv that will be used to train the model
+    post-deployment.csv - a slice of mixed packets after training.csv that will be used for post-deployment testing
 """
 
 import pandas as pd
 from pathlib import Path
-import numpy as np
+import numpy.random as np
+from typing import Dict
 
 
-def set_difference(list1, list2):
-    """return list of elements in list1 that are not in list2"""
-    return [element for element in list1 if element not in list2]
+def randomly_inject_attacks(normal_df: pd.DataFrame,
+                            attack_dfs: Dict[str, pd.DataFrame],
+                            rng: np.Generator) -> pd.DataFrame:
+    """
+    Inject attacks in between normal packets with a probability of 5%.
+    :param normal_df: df_normal of normal packets
+    :param attack_dfs: dict with attack_type: attack_df pairs
+    :param rng: np.random Generator object
+    :return: df_normal with attacks injected between normal packets
+    """
+    time_col = 'frame.time_epoch'
+    precision = 6  # for rounding floats
+    min_gap_size = 1e-6  # in seconds
+    attack_prob = 0.05
 
-raw_dir_path = Path('../data/raw')
-processed_dir_path = Path('../data/processed')
-processed_dir_path.mkdir(exist_ok=True, parents=True)
+    attack_types = list(attack_dfs.keys())
+    # shuffle each attack dataframe once
+    attack_pools = {
+        k: v.sample(frac=1, random_state=rng).reset_index(drop=True)
+        for k, v in attack_dfs.items()
+    }
+    attack_indices = {k: 0 for k in attack_types}
+    t_initial = normal_df.iloc[0][time_col]
+    rows = []
+    for i in range(len(normal_df) - 1):
+        current = normal_df.iloc[i]
+        next_row = normal_df.iloc[i + 1]
 
-time_col = 'frame.time_epoch'
-precision = 6 #  for rounding floats
-min_gap_size = 1e-6 #  in seconds
-attack_prob = 0.05
-np.random.seed(42)
+        rows.append(current)
 
-n_records = 100_000
+        t_start = current[time_col]
+        t_end = next_row[time_col]
+        gap = t_end - t_start
 
-# load dfs - will take some time since >10 MM records
-df_normal = pd.DataFrame()
+        # decide whether to inject
+        if gap > min_gap_size and rng.random() < attack_prob:
+            # sample attack type uniformly
+            attack_type = rng.choice(attack_types)
+
+            # get next row from that attack type
+            idx = attack_indices[attack_type]
+            attack_df = attack_pools[attack_type]
+
+            attack_row = attack_df.iloc[idx % len(attack_df)].copy()
+            attack_indices[attack_type] += 1
+
+            # assign synthetic timestamp inside gap
+            t_new = round(t_start + rng.random() * gap, precision)
+            attack_row['frame.time_delta'] = round(t_new - t_start, precision)
+            attack_row['frame.time_delta_displayed'] = attack_row['frame.time_delta']
+            attack_row[time_col] = t_new
+            attack_row['class'] = attack_type
+            attack_row['frame.time_relative'] = round(t_new - t_initial, precision)
+
+            rows.append(attack_row)
+    # add last normal row
+    rows.append(normal_df.iloc[-1])
+    df_final = (
+        pd.DataFrame(rows)
+        .reset_index(drop=True)
+    )
+    # drop cols that are all NA
+    df_final = df_final.dropna(axis='columns', how='all')
+
+    return df_final
+
+
+raw_dir_path = Path('../data/raw') # must exist
+processed_data_dir = Path('../data/processed')
+processed_data_dir.mkdir(exist_ok=True, parents=True)
+df_normal = pd.read_csv(raw_dir_path / 'legitimate_1w.csv')
+
+# --- create reference.csv ---
+# first 100k normal packets
+df_ref = df_normal.iloc[:100_000]
+df_ref['class'] = 'legitimate'
+df_ref.to_csv(processed_data_dir / 'reference.csv', index=False)
+
+# --- load attack csv files ---
 dfs_attack = {}
 for file in raw_dir_path.iterdir():
     filename = file.name.split('.')[0]
     packet_class = filename.split('_')[0]
 
     if file.suffix == '.csv':
-        df = pd.read_csv(file, nrows=n_records, low_memory=False)
-        df['class'] = packet_class
-        if packet_class == 'legitimate':
-            df_normal = df
-        else:
-            dfs_attack[packet_class] = df
+        if packet_class != 'legitimate':
+            df = pd.read_csv(file)
+            df['class'] = packet_class
+            dfs_attack[packet_class] = df_normal
 
-attack_types = list(dfs_attack.keys())
-# shuffle each attack dataframe once
-attack_pools = {
-    k: v.sample(frac=1).reset_index(drop=True)
-    for k, v in dfs_attack.items()
-}
-attack_indices = {k: 0 for k in attack_types}
+df_end = df_normal.iloc[-200_000:] # take last 200k normal packets
+df_end['class'] = 'legitimate'
+rng_training = np.default_rng(1)
+# --- create training.csv ---
+# first half of df_end then randomly inject attack packets
+df_train = df_normal.iloc[0:100_000]
+df_train = randomly_inject_attacks(df_train, dfs_attack, rng_training)
+df_train.to_csv(processed_data_dir / 'training.csv', index=False)
 
-# randomly select packets from df_normal and attack_dfs
-# temporal structure of df_normal is preserved, and attack packets given synthetic time columns based on normal packets
-t_initial = df_normal.iloc[0][time_col]
-rows = []
-for i in range(len(df_normal) - 1):
-    current = df_normal.iloc[i]
-    next_row = df_normal.iloc[i + 1]
-
-    rows.append(current)
-
-    t_start = current[time_col]
-    t_end = next_row[time_col]
-    gap = t_end - t_start
-
-    # decide whether to inject
-    if gap > min_gap_size and np.random.rand() < attack_prob:
-        # sample attack type uniformly
-        attack_type = np.random.choice(attack_types)
-
-        # get next row from that attack type
-        idx = attack_indices[attack_type]
-        attack_df = attack_pools[attack_type]
-
-        attack_row = attack_df.iloc[idx % len(attack_df)].copy()
-        attack_indices[attack_type] += 1
-
-        # assign synthetic timestamp inside gap
-        t_new = round(t_start + np.random.rand() * gap, precision)
-        attack_row['frame.time_delta'] = round(t_new - t_start, precision)
-        attack_row['frame.time_delta_displayed'] = attack_row['frame.time_delta']
-        attack_row[time_col] = t_new
-        attack_row['class'] = attack_type
-
-        if len(rows) == 0:
-            attack_row['frame.time_relative'] = 0.0
-        else:
-            attack_row['frame.time_relative'] = round(t_new - t_initial, precision)
-
-        rows.append(attack_row)
-
-# add last normal row
-rows.append(df_normal.iloc[-1])
-
-# --- Final dataframe ---
-df_final = (
-    pd.DataFrame(rows)
-    .sort_values(time_col)
-    .reset_index(drop=True)
-)
-cols_original = df_final.columns
-
-# drop cols that are all na
-df_final = df_final.dropna(axis='columns', how='all')
-cols_kept = df_final.columns
-print(f'Dropping {len(cols_original)-len(cols_kept)} columns: {set_difference(cols_original, cols_kept)}')
-
-# drop records with na in key_col
-n_na = df_final[time_col].isna().sum()
-print(f'{n_na} records with NaN in {time_col}.')
-df_final = df_final.dropna(axis='rows', subset=[time_col])
-
-df_final.to_csv(processed_dir_path / 'processed.csv', index=False)
+# --- create post-deployment.csv ---
+# second half of df_end then randomly inject attack packets
+df_post_deploy = df_end.iloc[100_000:]
+rng_deploy = np.default_rng(2)
+df_post_deploy = randomly_inject_attacks(df_post_deploy, dfs_attack, rng_deploy)
+df_post_deploy.to_csv(processed_data_dir / 'post-deployment.csv', index=False)
